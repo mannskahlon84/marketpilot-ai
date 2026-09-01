@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
         goal: "conversion",
       };
 
-      videoPlan = HybridCreativePlanner.createCreativePlan(
+      videoPlan = await HybridCreativePlanner.createCreativePlan(
         campaignInput,
         {
           duration: "15s",

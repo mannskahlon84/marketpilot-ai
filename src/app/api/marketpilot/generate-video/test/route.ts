@@ -37,7 +37,7 @@ export async function GET() {
 
   try {
     // Test 1: VideoPlan conversion & creation
-    const videoPlan = ScenePlanner.generateVideoPlanFromCampaign(dummyCampaign, {
+    const videoPlan = await ScenePlanner.generateVideoPlanFromCampaign(dummyCampaign, {
       duration: "30s",
       aspectRatio: "9:16",
     });

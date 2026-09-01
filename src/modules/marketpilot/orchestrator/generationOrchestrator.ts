@@ -3,7 +3,6 @@ import { JobRepository } from "../database/repositories/jobRepository";
 import { GenerationJob, DBGeneratedVideo } from "../database/types/database.types";
 import { ScenePlanner } from "../video-planner/scenePlanner";
 import { TimelineBuilder } from "../video-generator/timelineBuilder";
-import { FFmpegRenderer } from "../../services/renderers/FFmpegRenderer";
 import { VideoRepository } from "../database/repositories/videoRepository";
 import { AssetService } from "../storage/assetService";
 
@@ -43,7 +42,7 @@ export class TimelineAssemblyStep implements GenerationStep {
   name = "TimelineAssembly";
   async execute(context: GenerationContext): Promise<void> {
     if (!context.videoPlan) throw new Error("Missing video plan");
-    context.renderTimeline = await TimelineBuilder.buildTimeline(context.videoPlan, context.campaignId);
+    context.renderTimeline = await TimelineBuilder.buildTimeline(context.videoPlan);
   }
 }
 

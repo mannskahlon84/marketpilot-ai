@@ -13,13 +13,11 @@ import { VoicePlanner } from "./voicePlanner";
 
 import { HybridCreativePlanner } from "./hybridCreativePlanner";
 
-export interface CreateVideoPlanOptions {
-  duration?: VideoDuration;
-  aspectRatio?: AspectRatio;
-  customTitle?: string;
-  mediaUrls?: string[];
-  hybridAiMode?: boolean;
-}
+// Re-exported from HybridCreativePlanner so both planners accept the same options.
+// ScenePlanner forwards this object wholesale, so a narrower local copy silently
+// rejected valid fields such as campaignProfile and brandProfile.
+export type { CreateVideoPlanOptions } from "./hybridCreativePlanner";
+import type { CreateVideoPlanOptions } from "./hybridCreativePlanner";
 
 export class ScenePlanner {
   /**

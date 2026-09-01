@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import https from "https";
 import http from "http";
+import crypto from "crypto";
 import { VideoRenderer } from "./VideoRenderer";
 import { RenderTimeline } from "@/modules/marketpilot/video-generator/types/generator.types";
 
@@ -193,13 +194,31 @@ export class FFmpegRenderer implements VideoRenderer {
           return;
         }
 
-        // Calculate duration for each scene so sum equals totalDuration
-        const baseDur = Math.floor(totalDuration / validScenes.length);
-        const sceneDurations = validScenes.map((_, i) =>
-          i === validScenes.length - 1
-            ? totalDuration - baseDur * (validScenes.length - 1)
-            : baseDur
-        );
+        // Honour the durations the planner computed (scene.startTime/endTime) rather
+        // than splitting the total evenly. Integer division used to hand the last
+        // scene the remainder — a 15s/4-scene plan rendered as 3s,3s,3s,6s.
+        const parseSeconds = (value: unknown): number => {
+          const n = parseFloat(String(value ?? "").replace(/[^0-9.]/g, ""));
+          return Number.isFinite(n) ? n : NaN;
+        };
+        const evenDur = totalDuration / validScenes.length;
+        const sceneDurations = validScenes.map((s) => {
+          const planned = parseSeconds(s.endTime) - parseSeconds(s.startTime);
+          return Number.isFinite(planned) && planned > 0.1
+            ? Number(planned.toFixed(3))
+            : evenDur;
+        });
+
+        // Absorb any rounding drift into the final scene so the timeline still fills
+        // exactly totalDuration (the output is hard-capped with -t).
+        const plannedTotal = sceneDurations.reduce((a, b) => a + b, 0);
+        const drift = totalDuration - plannedTotal;
+        if (Math.abs(drift) > 0.001) {
+          const lastIdx = sceneDurations.length - 1;
+          sceneDurations[lastIdx] = Number(
+            Math.max(0.5, sceneDurations[lastIdx] + drift).toFixed(3)
+          );
+        }
 
         let inputIdx = 0;
         const sceneInputMeta: Array<{
@@ -255,17 +274,21 @@ export class FFmpegRenderer implements VideoRenderer {
             currLabel = prodLabel;
           }
 
-          // Draw scene Hook / Title text overlay at the top (y=220)
+          // Draw scene Hook / Title text overlay at the top (y=220), wrapped to
+          // at most two lines so it cannot overflow the 1080px frame.
           if (scene.textOverlay) {
-            const safeText = scene.textOverlay
-              .replace(/['":\\]/g, "")
-              .trim()
-              .substring(0, 45);
-            const txtLabel = `v_txt_${idx}`;
-            filterChains.push(
-              `[${currLabel}]drawtext=text='${safeText}':fontsize=64:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw=20:x=(w-text_w)/2:y=220[${txtLabel}]`
+            const titleLines = this.wrapText(
+              this.escapeDrawText(scene.textOverlay),
+              26,
+              2
             );
-            currLabel = txtLabel;
+            titleLines.forEach((line, lineIdx) => {
+              const txtLabel = `v_txt_${idx}_${lineIdx}`;
+              filterChains.push(
+                `[${currLabel}]drawtext=text='${line}':fontsize=64:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw=20:x=(w-text_w)/2:y=${220 + lineIdx * 88}[${txtLabel}]`
+              );
+              currLabel = txtLabel;
+            });
           }
 
           // Draw scene caption / voiceover text at the bottom (y=h-380)
@@ -275,15 +298,21 @@ export class FFmpegRenderer implements VideoRenderer {
             ) || timeline.captions?.[idx];
           const captionText = captionObj?.text || scene.voiceText;
           if (captionText) {
-            const safeCaption = captionText
-              .replace(/['":\\]/g, "")
-              .trim()
-              .substring(0, 55);
-            const capLabel = `v_cap_${idx}`;
-            filterChains.push(
-              `[${currLabel}]drawtext=text='${safeCaption}':fontsize=54:fontcolor=yellow:box=1:boxcolor=black@0.85:boxborderw=18:x=(w-text_w)/2:y=h-380[${capLabel}]`
+            // Wrapped to three lines instead of truncated at 55 characters, which
+            // used to cut captions off mid-word and run them past the frame edge.
+            const captionLines = this.wrapText(
+              this.escapeDrawText(captionText),
+              32,
+              3
             );
-            currLabel = capLabel;
+            const blockHeight = (captionLines.length - 1) * 74;
+            captionLines.forEach((line, lineIdx) => {
+              const capLabel = `v_cap_${idx}_${lineIdx}`;
+              filterChains.push(
+                `[${currLabel}]drawtext=text='${line}':fontsize=54:fontcolor=yellow:box=1:boxcolor=black@0.85:boxborderw=18:x=(w-text_w)/2:y=h-380-${blockHeight - lineIdx * 74}[${capLabel}]`
+              );
+              currLabel = capLabel;
+            });
           }
 
           // Trim stream to exact scene duration and standardize to 25 fps
@@ -374,7 +403,14 @@ export class FFmpegRenderer implements VideoRenderer {
   ): Promise<string | null> {
     if (!url) return null;
 
-    const targetPath = path.join(this.cacheDir, filename);
+    // Cache entries are keyed by a hash of the source URL, not by scene index.
+    // Index-based names (scene_0_bg.jpg) collide across renders and campaigns, so a
+    // later render silently reuses an earlier one's images — and one failed download
+    // poisons that slot permanently.
+    const targetPath = path.join(
+      this.cacheDir,
+      this.cacheFilenameFor(url, filename)
+    );
 
     if (url.startsWith("data:")) {
       const matches = url.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
@@ -399,7 +435,14 @@ export class FFmpegRenderer implements VideoRenderer {
     }
 
     if (fs.existsSync(targetPath)) {
-      return targetPath;
+      // A cached entry that is too small to be a real image is a previous failed
+      // download; drop it and fetch again rather than rendering a broken frame.
+      if (this.isUsableAsset(targetPath)) return targetPath;
+      try {
+        fs.unlinkSync(targetPath);
+      } catch {
+        /* fall through and re-download over it */
+      }
     }
 
     const downloadWithRedirects = (currentUrl: string, depth = 0): Promise<string | null> => {
@@ -424,6 +467,18 @@ export class FFmpegRenderer implements VideoRenderer {
             res.pipe(fileStream);
             fileStream.on("finish", () => {
               fileStream.close();
+              if (!this.isUsableAsset(targetPath)) {
+                console.warn(
+                  `[FFmpegRenderer] Discarding truncated asset from ${currentUrl}`
+                );
+                try {
+                  fs.unlinkSync(targetPath);
+                } catch {
+                  /* ignore */
+                }
+                resolve(null);
+                return;
+              }
               resolve(targetPath);
             });
             fileStream.on("error", () => {
@@ -437,6 +492,69 @@ export class FFmpegRenderer implements VideoRenderer {
     };
 
     return downloadWithRedirects(url);
+  }
+
+  /**
+   * Builds a cache filename keyed by the asset URL, preserving the extension of the
+   * caller's hint so FFmpeg still sees a sensible suffix.
+   */
+  private cacheFilenameFor(url: string, hint: string): string {
+    const ext = path.extname(hint) || ".bin";
+    const hash = crypto.createHash("sha1").update(url).digest("hex").slice(0, 16);
+    return `asset_${hash}${ext}`;
+  }
+
+  /**
+   * A downloaded asset smaller than 1 KB is a placeholder, an error page, or a
+   * truncated transfer — never a usable image or audio track.
+   */
+  private isUsableAsset(filePath: string): boolean {
+    try {
+      return fs.statSync(filePath).size >= 1024;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Wraps overlay text onto at most `maxLines` lines of roughly `maxChars`
+   * characters, so long captions no longer run off the edge of the frame.
+   */
+  private wrapText(
+    text: string,
+    maxChars: number,
+    maxLines: number
+  ): string[] {
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let current = "";
+
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (candidate.length <= maxChars) {
+        current = candidate;
+        continue;
+      }
+      if (current) lines.push(current);
+      current = word.length > maxChars ? word.slice(0, maxChars) : word;
+      if (lines.length === maxLines) break;
+    }
+    if (current && lines.length < maxLines) lines.push(current);
+
+    if (lines.length === maxLines && words.length) {
+      const rendered = lines.join(" ").split(/\s+/).length;
+      if (rendered < words.length) {
+        lines[maxLines - 1] = `${lines[maxLines - 1].replace(/[.,;:]$/, "")}…`;
+      }
+    }
+    return lines;
+  }
+
+  /**
+   * Escapes text for use inside an FFmpeg drawtext filter argument.
+   */
+  private escapeDrawText(text: string): string {
+    return text.replace(/['":\\]/g, "").trim();
   }
 
   /**
