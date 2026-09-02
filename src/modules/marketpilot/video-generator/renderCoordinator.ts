@@ -152,8 +152,17 @@ export class RenderCoordinator {
           false
         );
 
-      job.status = "COMPLETED";
-      job.previewUrl = renderResult.outputUrl;
+      // The render engine reports failure through the job it returns, not by
+      // throwing — so check it. Marking COMPLETED with an empty previewUrl would
+      // tell the client a video is ready when none was produced.
+      if (!renderResult.outputUrl || renderResult.status === "FAILED") {
+        job.status = "FAILED";
+        job.error =
+          "Rendering failed — no output file was produced. See server logs for the FFmpeg error.";
+      } else {
+        job.status = "COMPLETED";
+        job.previewUrl = renderResult.outputUrl;
+      }
       this.activeJobs.set(videoId, { ...job });
     } catch (e: any) {
       job.status = "FAILED";
@@ -215,8 +224,14 @@ export class RenderCoordinator {
           setTimeout(() => {
             const jCompleted = this.activeJobs.get(videoId);
             if (jCompleted) {
-              jCompleted.status = "COMPLETED";
-              jCompleted.previewUrl = renderResult.outputUrl;
+              if (!renderResult.outputUrl || renderResult.status === "FAILED") {
+                jCompleted.status = "FAILED";
+                jCompleted.error =
+                  "Rendering failed — no output file was produced. See server logs for the FFmpeg error.";
+              } else {
+                jCompleted.status = "COMPLETED";
+                jCompleted.previewUrl = renderResult.outputUrl;
+              }
               this.activeJobs.set(videoId, { ...jCompleted });
             }
           }, 1200);

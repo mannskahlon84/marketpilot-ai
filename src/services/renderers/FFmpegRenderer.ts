@@ -168,29 +168,21 @@ export class FFmpegRenderer implements VideoRenderer {
           (s) => s.localBgPath && fs.existsSync(s.localBgPath)
         );
 
+        // No usable imagery means there is nothing to advertise. Rendering a black
+        // placeholder here and reporting COMPLETED hands a customer an empty video
+        // and tells them it worked — fail loudly instead, naming what could not
+        // be resolved so the caller can show a useful message.
         if (validScenes.length === 0) {
-          command
-            .input("color=c=black:s=1080x1920:d=" + totalDuration)
-            .inputFormat("lavfi");
-          const filters = [
-            "drawtext=expansion=none:text='MarketPilot Video Reel':fontsize=64:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
-          ];
-          command.videoFilters(filters);
-          command.outputOptions([
-            "-c:v libx264",
-            "-pix_fmt yuv420p",
-            "-movflags +faststart",
-            "-t " + totalDuration,
-          ]);
-          command
-            .output(outputPath)
-            .on("end", () => resolve())
-            .on("error", (err: any) => {
-              this.generateFallbackVideo(outputPath, totalDuration)
-                .then(resolve)
-                .catch(reject);
-            });
-          command.run();
+          const attempted = scenes
+            .map((s) => s.backgroundImageUrl)
+            .filter(Boolean);
+          reject(
+            new Error(
+              `No usable scene images. ${attempted.length} asset(s) could not be resolved: ` +
+                `${attempted.slice(0, 5).join(", ")}${attempted.length > 5 ? ", …" : ""}. ` +
+                `Check that uploaded files exist and remote URLs are reachable.`
+            )
+          );
           return;
         }
 
