@@ -16,6 +16,7 @@ import { AvatarMode } from "../avatar-engine/types/avatar.types";
 import { AvatarSelector } from "../avatar-engine/avatarSelector";
 import { AvatarPromptEngine } from "../avatar-engine/avatarPromptEngine";
 
+import { CopyWriter, AdLanguage } from "./copywriter";
 import { CampaignProfile } from "../campaign-profile/types/campaign.types";
 import { CampaignDefaults } from "../campaign-profile/campaignDefaults";
 import { BrandProfile } from "../brand-profile/types/brand.types";
@@ -34,6 +35,8 @@ export interface CreateVideoPlanOptions {
   industryTemplate?: string;
   campaignProfile?: Partial<CampaignProfile>;
   brandProfile?: BrandProfile;
+  /** Language for the generated ad copy: "en" (default), "ar", or "bilingual". */
+  adLanguage?: AdLanguage;
 }
 
 export class HybridCreativePlanner {
@@ -81,6 +84,21 @@ export class HybridCreativePlanner {
     // 1. Analyze uploaded product images and designate roles
     const analyzedAssets = AssetAnalyzer.analyze(mediaUrls, brandName, industry);
     const heroAsset = AssetAnalyzer.chooseHeroImage(analyzedAssets);
+
+    // 1b. Ask the copy layer for the ad script. Returns Gemini-written copy when a
+    // key is configured, otherwise deterministic copy built from the client's input.
+    const adCopy = await CopyWriter.writeAdCopy({
+      brandName,
+      industry,
+      clientPrompt: campaign.valueProposition || campaign.marketingStrategy,
+      features: [campaign.marketingStrategy, campaign.valueProposition].filter(
+        Boolean
+      ) as string[],
+      offer: campaign.valueProposition,
+      contact: (campaign as any).contact,
+      price: (campaign as any).price,
+      language: options.adLanguage,
+    });
 
     // 2. Define the 4-part marketing structure: Hook -> Feature -> Benefit -> CTA
     const marketingStructure: {
@@ -146,8 +164,10 @@ export class HybridCreativePlanner {
       const nextAssetUrl =
         analyzedAssets[(idx + 1) % analyzedAssets.length]?.url || bgUrl;
 
+      // Written copy wins over the hardcoded stage defaults.
+      const stageCopy = adCopy.stages[idx];
       const rawVoiceText = this.applyVoicePersonality(
-        stage.defaultVoiceText,
+        stageCopy?.voiceText || stage.defaultVoiceText,
         voicePersonality
       );
       const { animationStyle, transition, videoPrompt } = this.applyCinematicStyle(
@@ -170,7 +190,9 @@ export class HybridCreativePlanner {
         animationStyle,
         transition,
         textOverlay:
-          assignedAsset?.titleOverlay || `${brandName} ${stage.role.toUpperCase()}`,
+          stageCopy?.textOverlay ||
+          assignedAsset?.titleOverlay ||
+          `${brandName} ${stage.role.toUpperCase()}`,
         backgroundImageUrl: bgUrl,
         productImageUrl: undefined,
         supportingVisualUrls: nextAssetUrl ? [nextAssetUrl] : undefined,
@@ -190,8 +212,8 @@ export class HybridCreativePlanner {
       voiceScript: scenes.map((s) => s.voiceText).join(" "),
       visualAssets,
       thumbnailPrompt: `${brandName} premium product visualization, 8k resolution`,
-      caption: `${campaign.valueProposition}\n\n#${brandName} #${industry}`,
-      hashtags: [brandName.toLowerCase(), industry, "premium"],
+      caption: `${adCopy.caption}\n\n${adCopy.hashtags.map((h) => `#${h}`).join(" ")}`,
+      hashtags: adCopy.hashtags,
       createdAt: new Date().toISOString(),
       mediaUrls,
     };

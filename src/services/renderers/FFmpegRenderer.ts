@@ -173,7 +173,7 @@ export class FFmpegRenderer implements VideoRenderer {
             .input("color=c=black:s=1080x1920:d=" + totalDuration)
             .inputFormat("lavfi");
           const filters = [
-            "drawtext=text='MarketPilot Video Reel':fontsize=64:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
+            "drawtext=expansion=none:text='MarketPilot Video Reel':fontsize=64:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2",
           ];
           command.videoFilters(filters);
           command.outputOptions([
@@ -285,7 +285,7 @@ export class FFmpegRenderer implements VideoRenderer {
             titleLines.forEach((line, lineIdx) => {
               const txtLabel = `v_txt_${idx}_${lineIdx}`;
               filterChains.push(
-                `[${currLabel}]drawtext=text='${line}':fontsize=64:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw=20:x=(w-text_w)/2:y=${220 + lineIdx * 88}[${txtLabel}]`
+                `[${currLabel}]drawtext=expansion=none:text='${line}':fontsize=64:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw=20:x=(w-text_w)/2:y=${220 + lineIdx * 88}[${txtLabel}]`
               );
               currLabel = txtLabel;
             });
@@ -309,7 +309,7 @@ export class FFmpegRenderer implements VideoRenderer {
             captionLines.forEach((line, lineIdx) => {
               const capLabel = `v_cap_${idx}_${lineIdx}`;
               filterChains.push(
-                `[${currLabel}]drawtext=text='${line}':fontsize=54:fontcolor=yellow:box=1:boxcolor=black@0.85:boxborderw=18:x=(w-text_w)/2:y=h-380-${blockHeight - lineIdx * 74}[${capLabel}]`
+                `[${currLabel}]drawtext=expansion=none:text='${line}':fontsize=54:fontcolor=yellow:box=1:boxcolor=black@0.85:boxborderw=18:x=(w-text_w)/2:y=h-380-${blockHeight - lineIdx * 74}[${capLabel}]`
               );
               currLabel = capLabel;
             });
